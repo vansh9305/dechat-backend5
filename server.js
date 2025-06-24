@@ -1,42 +1,37 @@
-// backend/server.js
-import express from "express";
-import http from "http";
-import { Server } from "socket.io";
-import cors from "cors";
+const express = require("express");
+const http = require("http");
+const cors = require("cors");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"],
-  },
-});
 
 app.use(cors());
 
-let messages = [];
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("New user connected");
 
-  // Send existing messages
-  socket.emit("load_messages", messages);
+  socket.on("chat message", (msg) => {
+    io.emit("chat message", msg);
+  });
 
-  // Handle new messages
-  socket.on("send_message", (data) => {
-    messages.push(data);
-    io.emit("receive_message", data);
+  socket.on("typing", (name) => {
+    socket.broadcast.emit("typing", name);
   });
 
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
+    console.log("User disconnected");
   });
 });
 
-server.listen(3001, () => {
-  console.log("Socket server running on http://localhost:3001");
-});
-socket.on("typing", (data) => {
-  socket.broadcast.emit("typing", data);
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`Socket server running on http://localhost:${PORT}`);
 });
