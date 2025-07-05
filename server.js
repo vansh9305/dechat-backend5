@@ -5,37 +5,52 @@ const bodyParser = require('body-parser');
 const otpGenerator = require('otp-generator');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
 // ===== Constants =====
 const PORT = process.env.PORT || 3002;
-const HOST = process.env.HOST || 'localhost';
-const OTP_FILE = 'otp_store.json';
+const HOST = '0.0.0.0'; // Required for Render
+const OTP_FILE = process.env.RENDER 
+  ? path.join('/var/data', 'otp_store.json') // Persistent storage on Render
+  : 'otp_store.json';
 
 // ===== OTP Storage =====
 let otpStorage = new Map();
 
-// Load persisted OTPs on startup
-if (fs.existsSync(OTP_FILE)) {
+// Initialize persistent storage directory on Render
+if (process.env.RENDER && !fs.existsSync('/var/data')) {
+  fs.mkdirSync('/var/data', { recursive: true });
+}
+
+// Load OTPs on startup
+const loadOtps = () => {
   try {
-    const storedOtps = JSON.parse(fs.readFileSync(OTP_FILE));
-    otpStorage = new Map(storedOtps);
-    console.log(`Loaded ${otpStorage.size} OTPs from storage`);
+    if (fs.existsSync(OTP_FILE)) {
+      const storedOtps = JSON.parse(fs.readFileSync(OTP_FILE));
+      otpStorage = new Map(storedOtps);
+      console.log(`Loaded ${otpStorage.size} OTPs from storage`);
+    }
   } catch (err) {
     console.error('Error loading OTP storage:', err);
   }
-}
+};
+
+loadOtps();
 
 // ===== Middleware =====
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: process.env.FRONTEND_URL 
+    ? process.env.FRONTEND_URL.split(',') 
+    : 'http://localhost:3000',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
 app.use(express.json({
+  limit: '10kb',
   verify: (req, res, buf) => {
     try {
       JSON.parse(buf.toString('utf8'));
@@ -48,23 +63,19 @@ app.use(express.json({
 }));
 
 app.use((req, res, next) => {
-  console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
 // ===== Email Setup =====
 const transporter = nodemailer.createTransport({
   service: 'gmail',
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false,
-    ciphers: 'SSLv3'
+    rejectUnauthorized: process.env.NODE_ENV === 'production'
   }
 });
 
@@ -72,15 +83,11 @@ const transporter = nodemailer.createTransport({
 const router = express.Router();
 
 // Health Check
-app.get('/', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({
-    status: 'Server is running',
-    endpoints: {
-      sendOTP: 'POST /api/auth/send-otp',
-      verifyOTP: 'POST /api/auth/verify-otp',
-      testEmail: 'GET /test-email',
-      activeOTPs: 'GET /active-otps'
-    }
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -94,9 +101,10 @@ router.post('/send-otp', async (req, res) => {
     }
 
     const otp = otpGenerator.generate(6, {
+      digits: true,
+      lowerCaseAlphabets: false,
       upperCaseAlphabets: false,
-      specialChars: false,
-      lowerCaseAlphabets: false
+      specialChars: false
     });
 
     const otpData = { 
@@ -106,7 +114,11 @@ router.post('/send-otp', async (req, res) => {
     };
     
     otpStorage.set(email, otpData);
-    fs.writeFileSync(OTP_FILE, JSON.stringify([...otpStorage]));
+    
+    // Async file write for better performance
+    fs.writeFile(OTP_FILE, JSON.stringify([...otpStorage]), (err) => {
+      if (err) console.error('OTP save error:', err);
+    });
 
     if (process.env.EMAIL_USER) {
       await transporter.sendMail({
@@ -144,7 +156,7 @@ router.post('/verify-otp', (req, res) => {
     
     if (Date.now() > stored.expires) {
       otpStorage.delete(email);
-      fs.writeFileSync(OTP_FILE, JSON.stringify([...otpStorage]));
+      fs.writeFile(OTP_FILE, JSON.stringify([...otpStorage]), () => {});
       return res.status(400).json({ error: 'OTP expired' });
     }
 
@@ -153,43 +165,12 @@ router.post('/verify-otp', (req, res) => {
     }
 
     otpStorage.delete(email);
-    fs.writeFileSync(OTP_FILE, JSON.stringify([...otpStorage]));
+    fs.writeFile(OTP_FILE, JSON.stringify([...otpStorage]), () => {});
     res.json({ success: true });
   } catch (error) {
     console.error('Verify Error:', error);
     res.status(500).json({ error: 'Verification failed' });
   }
-});
-
-// Test Endpoints
-app.get('/test-email', async (req, res) => {
-  if (!process.env.EMAIL_USER) {
-    return res.status(400).json({ error: 'Email not configured' });
-  }
-
-  try {
-    const info = await transporter.sendMail({
-      from: `"Test" <${process.env.EMAIL_USER}>`,
-      to: process.env.EMAIL_USER,
-      subject: 'Test Email',
-      text: 'This is a test email'
-    });
-    res.json({ success: true, messageId: info.messageId });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Email failed',
-      details: error.message
-    });
-  }
-});
-
-app.get('/active-otps', (req, res) => {
-  res.json(Array.from(otpStorage.entries()).map(([email, data]) => ({
-    email,
-    otp: data.otp,
-    expiresIn: Math.round((data.expires - Date.now())/1000) + "s",
-    status: Date.now() > data.expires ? 'EXPIRED' : 'ACTIVE'
-  })));
 });
 
 // Mount router
@@ -198,11 +179,14 @@ app.use('/api/auth', router);
 // Error Handling
 app.use((err, req, res, next) => {
   console.error('Server Error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ 
+    error: 'Internal server error',
+    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+  });
 });
 
 // ===== Server Startup =====
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`
 ███████╗ ██████╗ ██████╗  ██████╗ ██████╗ 
 ██╔════╝██╔═══██╗██╔══██╗██╔═══██╗██╔══██╗
@@ -216,9 +200,18 @@ app.listen(PORT, HOST, () => {
 📋 Available Endpoints:
   POST   /api/auth/send-otp
   POST   /api/auth/verify-otp
-  GET    /test-email
-  GET    /active-otps
+  GET    /health
 
-🔧 Email Status: ${process.env.EMAIL_USER ? '✅ Configured' : '❌ Disabled'}
+🔧 Environment: ${process.env.NODE_ENV || 'development'}
+✉️  Email: ${process.env.EMAIL_USER ? 'Configured' : 'Not configured'}
 `);
+});
+
+// Handle shutdown gracefully
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
