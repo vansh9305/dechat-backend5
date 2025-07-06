@@ -11,40 +11,41 @@ const WebSocket = require('ws');
 
 const app = express();
 
+// ===== CORS Configuration =====
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'https://your-frontend-url.netlify.app', // Your production frontend URL
+  process.env.FRONTEND_URL // Optional environment variable
+].filter(Boolean);
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json({ limit: '10kb' }));
+
 // ===== Constants =====
 const PORT = process.env.PORT || 3002;
-const HOST = process.env.HOST || '0.0.0.0'; // Changed for Render compatibility
+const HOST = '0.0.0.0'; // Updated for Render compatibility
 const DATA_DIR = path.join(__dirname, 'data');
 const OTP_FILE = path.join(DATA_DIR, 'otp_store.json');
 const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 
 // ===== WebSocket Setup =====
 const server = createServer(app);
-const wss = new WebSocket.Server({ 
-  server,
-  perMessageDeflate: {
-    zlibDeflateOptions: {
-      chunkSize: 1024,
-      memLevel: 7,
-      level: 3
-    },
-    zlibInflateOptions: {
-      chunkSize: 10 * 1024
-    },
-    clientNoContextTakeover: true,
-    serverNoContextTakeover: true,
-    threshold: 1024
-  }
-});
+const wss = new WebSocket.Server({ server });
 
-// Track connected clients and their groups
 const clients = new Map();
 
 wss.on('connection', (ws, req) => {
   const clientId = uuidv4();
-  console.log(`Client connected: ${clientId} from ${req.socket.remoteAddress}`);
+  console.log(`Client connected: ${clientId}`);
 
-  // Send immediate connection confirmation
   ws.send(JSON.stringify({
     type: 'connection',
     status: 'success',
@@ -62,7 +63,6 @@ wss.on('connection', (ws, req) => {
           group: message.group,
           walletAddress: message.walletAddress || null
         });
-        console.log(`Client ${clientId} subscribed to ${message.group}`);
         return;
       }
 
@@ -74,11 +74,8 @@ wss.on('connection', (ws, req) => {
           status: 'delivered'
         };
 
-        console.log(`Message in ${message.group} from ${message.sender || 'anon'}`);
-
         await saveMessage(fullMessage);
 
-        // Broadcast to group members
         clients.forEach(client => {
           if (client.group === message.group && client.ws.readyState === WebSocket.OPEN) {
             client.ws.send(JSON.stringify(fullMessage));
@@ -92,7 +89,6 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     clients.delete(clientId);
-    console.log(`Client ${clientId} disconnected`);
   });
 
   ws.on('error', (err) => {
@@ -104,13 +100,8 @@ wss.on('connection', (ws, req) => {
 const initializeStorage = async () => {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
-    
-    const files = [OTP_FILE, MESSAGES_FILE];
-    for (const file of files) {
-      if (!(await fileExists(file))) {
-        await fs.writeFile(file, '[]');
-      }
-    }
+    if (!(await fileExists(OTP_FILE))) await fs.writeFile(OTP_FILE, '{}');
+    if (!(await fileExists(MESSAGES_FILE))) await fs.writeFile(MESSAGES_FILE, '[]');
   } catch (err) {
     console.error('Storage init error:', err);
     process.exit(1);
@@ -132,46 +123,18 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
-  },
-  tls: {
-    rejectUnauthorized: process.env.NODE_ENV === 'production'
   }
 });
 
-// ===== Secure OTP Generation =====
-const generateNumericOTP = (length = 6) => {
-  const digits = '0123456789';
-  let otp = '';
-  const randomBytes = crypto.randomBytes(length);
-  
-  for (let i = 0; i < length; i++) {
-    otp += digits[randomBytes[i] % digits.length];
-  }
-  
-  return otp;
-};
+// ===== OTP Management =====
+let otpStorage = {};
 
-// ===== Middleware =====
-app.use(cors({
-  origin: process.env.FRONTEND_URL || '*', // Temporary open for testing
-  credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS']
-}));
-
-app.use(express.json({ limit: '10kb' }));
-
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  next();
-});
-
-// ===== OTP Storage =====
-let otpStorage = new Map();
+const generateOTP = () => crypto.randomInt(100000, 999999).toString();
 
 const loadOtps = async () => {
   try {
     const data = await fs.readFile(OTP_FILE, 'utf8');
-    otpStorage = new Map(JSON.parse(data || '[]'));
+    otpStorage = JSON.parse(data || '{}');
   } catch (err) {
     console.error('Error loading OTPs:', err);
   }
@@ -179,7 +142,7 @@ const loadOtps = async () => {
 
 const saveOtps = async () => {
   try {
-    await fs.writeFile(OTP_FILE, JSON.stringify([...otpStorage]));
+    await fs.writeFile(OTP_FILE, JSON.stringify(otpStorage, null, 2));
   } catch (err) {
     console.error('Error saving OTPs:', err);
   }
@@ -214,31 +177,33 @@ app.get('/health', (req, res) => {
     websocket: {
       clients: clients.size,
       groups: [...new Set([...clients.values()].map(c => c.group))]
-    },
-    memory: process.memoryUsage()
+    }
   });
 });
 
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email required' });
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
 
-    const otp = generateNumericOTP();
-    otpStorage.set(email, { 
-      otp, 
-      expiresAt: Date.now() + 300000 // 5 mins
-    });
+    const otp = generateOTP();
+    otpStorage[email] = { 
+      otp,
+      expiresAt: Date.now() + 300000,
+      attempts: 0
+    };
     await saveOtps();
 
     await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: `"Your App" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: 'Your OTP Code',
-      text: `Your OTP is: ${otp} (expires in 5 minutes)`
+      subject: 'Your Verification Code',
+      text: `Your OTP code is: ${otp}\nExpires in 5 minutes`
     });
-    
-    res.json({ success: true });
+
+    res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
     console.error('OTP send error:', err);
     res.status(500).json({ error: 'Failed to send OTP' });
@@ -250,22 +215,35 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
 
-    const stored = otpStorage.get(email);
+    const stored = otpStorage[email];
     if (!stored) return res.status(400).json({ error: 'OTP not found' });
 
     if (Date.now() > stored.expiresAt) {
-      otpStorage.delete(email);
+      delete otpStorage[email];
       await saveOtps();
       return res.status(400).json({ error: 'OTP expired' });
     }
 
-    if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+    if (stored.otp !== otp) {
+      stored.attempts = (stored.attempts || 0) + 1;
+      if (stored.attempts >= 3) {
+        delete otpStorage[email];
+        await saveOtps();
+        return res.status(400).json({ error: 'Too many attempts' });
+      }
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
 
-    otpStorage.delete(email);
+    delete otpStorage[email];
     await saveOtps();
-    res.json({ success: true, token: uuidv4() });
+    
+    res.json({
+      success: true,
+      token: uuidv4(),
+      user: { email }
+    });
   } catch (err) {
-    console.error('OTP verify error:', err);
+    console.error('OTP verification error:', err);
     res.status(500).json({ error: 'Failed to verify OTP' });
   }
 });
@@ -280,7 +258,6 @@ app.post('/api/messages', async (req, res) => {
 
     await saveMessage(message);
 
-    // Broadcast via WS
     clients.forEach(client => {
       if (client.group === message.group && client.ws.readyState === WebSocket.OPEN) {
         client.ws.send(JSON.stringify(message));
@@ -313,18 +290,7 @@ const startServer = async () => {
     console.log(`
       🚀 Server ready at http://${HOST}:${PORT}
       💬 WebSocket running on ws://${HOST}:${PORT}
-      
-      ⚠️  For Render deployment:
-      1. Set FRONTEND_URL in environment variables
-      2. Enable "WebSockets" in Render dashboard
-      3. Set NODE_ENV=production
     `);
-  });
-
-  process.on('SIGTERM', () => {
-    console.log('Shutting down gracefully...');
-    wss.clients.forEach(client => client.close());
-    server.close(() => process.exit(0));
   });
 };
 

@@ -1,1 +1,45 @@
-[{"sender":"testuser","group":"general","text":"Hello world","id":"153b1441-2f88-4cc6-91bc-75c4f1d69fc4","timestamp":"2025-07-05T15:00:45.111Z"}]
+[
+  {
+    "sender": "testuser",
+    "group": "general",
+    "text": "Hello world",
+    "id": "153b1441-2f88-4cc6-91bc-75c4f1d69fc4",
+    "timestamp": "2025-07-05T15:00:45.111Z"
+  },
+  {
+    "group": "general",
+    "text": "hello",
+    "timestamp": "2025-07-06T10:31:25.353Z",
+    "id": "d78b694f-1c1e-483a-abfa-a7ffb7f704fa"
+  },
+  {
+    "group": "general",
+    "text": "hello world",
+    "timestamp": "2025-07-06T10:55:20.859Z",
+    "id": "3185cc3d-45e7-4591-815a-41205799e82f"
+  },
+  {
+    "group": "general",
+    "text": "hello world",
+    "timestamp": "2025-07-06T10:55:37.878Z",
+    "id": "6b95ca22-35d5-45a9-83ec-cc2a915631b8"
+  },
+  {
+    "group": "random",
+    "text": "hi",
+    "timestamp": "2025-07-06T10:55:55.368Z",
+    "id": "9f6ee3f0-c3b3-4e6e-900c-3ce30b181b08"
+  },
+  {
+    "group": "general",
+    "text": "hello",
+    "timestamp": "2025-07-06T11:04:55.191Z",
+    "id": "cea52257-1a55-44a8-8ec3-33b5ed468fcb"
+  },
+  {
+    "group": "general",
+    "text": "my name is vansh",
+    "timestamp": "2025-07-06T11:05:10.430Z",
+    "id": "7832525f-9350-4af2-8559-4004edba8b1e"
+  }
+]
