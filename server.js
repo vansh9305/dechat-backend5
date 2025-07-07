@@ -11,20 +11,25 @@ const WebSocket = require('ws');
 const app = express();
 
 const allowedOrigins = [
-  'https://delicate-nasturtium-4d6975.netlify.app',
-  'https://candid-mousse-75e4d8.netlify.app',
+  'https://thriving-naiad-ddffca.netlify.app',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
 app.use(cors({
   origin: function (origin, callback) {
     console.log('Incoming Origin:', origin);
-    if (!origin) return callback(null, true);
+
+    if (!origin) return callback(null, true); // allow curl, Postman, mobile apps
+
     const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
     const isAllowed = allowedOrigins.includes(origin);
-    if (isLocalhost || isAllowed) return callback(null, true);
-    console.warn('❌ Blocked by CORS:', origin);
-    return callback(new Error('Not allowed by CORS: ' + origin));
+
+    if (isLocalhost || isAllowed) {
+      return callback(null, true);
+    } else {
+      console.warn('❌ Blocked by CORS:', origin);
+      return callback(new Error('Not allowed by CORS: ' + origin));
+    }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
