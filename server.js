@@ -11,7 +11,7 @@ const WebSocket = require('ws');
 const app = express();
 
 const allowedOrigins = [
-  'https://delicate-nasturtium-4d6975.netlify.app',
+  'https://candid-mousse-75e4d8.netlify.app/',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
