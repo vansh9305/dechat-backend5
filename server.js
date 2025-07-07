@@ -8,25 +8,36 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const { createServer } = require('http');
 const WebSocket = require('ws');
-
 const app = express();
 
-// ===== CORS Configuration =====
 const allowedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://localhost:5173',
-  'https://your-frontend-url.netlify.app', // Your production frontend URL
-  process.env.FRONTEND_URL // Optional environment variable
+  'https://your-frontend-url.netlify.app', // Production URL
+  process.env.FRONTEND_URL
 ].filter(Boolean);
 
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    console.log('Incoming Origin:', origin); // <-- this MUST be here
+    if (!origin) return callback(null, true);
+
+    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+    const allowedOrigins = [
+      'https://your-frontend-url.netlify.app',
+      process.env.FRONTEND_URL
+    ].filter(Boolean);
+
+    const isAllowed = allowedOrigins.includes(origin);
+    if (isLocalhost || isAllowed) {
+      return callback(null, true);
+    } else {
+      console.warn('Blocked by CORS:', origin);
+      return callback(new Error('Not allowed by CORS: ' + origin));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-
 app.use(express.json({ limit: '10kb' }));
 
 // ===== Constants =====
