@@ -1,3 +1,4 @@
+// Top of file (already present)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -10,26 +11,24 @@ const { createServer } = require('http');
 const WebSocket = require('ws');
 const app = express();
 
+// Allowed Origins
 const allowedOrigins = [
   'https://thriving-naiad-ddffca.netlify.app',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
+// CORS Middleware
 app.use(cors({
   origin: function (origin, callback) {
     console.log('Incoming Origin:', origin);
-
-    if (!origin) return callback(null, true); // allow curl, Postman, mobile apps
+    if (!origin) return callback(null, true);
 
     const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
     const isAllowed = allowedOrigins.includes(origin);
+    if (isLocalhost || isAllowed) return callback(null, true);
 
-    if (isLocalhost || isAllowed) {
-      return callback(null, true);
-    } else {
-      console.warn('❌ Blocked by CORS:', origin);
-      return callback(new Error('Not allowed by CORS: ' + origin));
-    }
+    console.warn('❌ Blocked by CORS:', origin);
+    return callback(new Error('Not allowed by CORS: ' + origin));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -38,17 +37,20 @@ app.use(cors({
 
 app.use(express.json({ limit: '10kb' }));
 
+// Constants
 const PORT = process.env.PORT || 3002;
 const HOST = '0.0.0.0';
 const DATA_DIR = path.join(__dirname, 'data');
 const OTP_FILE = path.join(DATA_DIR, 'otp_store.json');
 const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const GROUPS_FILE = path.join(DATA_DIR, 'groups.json'); // ✅ New
 
 const server = createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const clients = new Map();
 
+// WebSocket
 wss.on('connection', (ws, req) => {
   const clientId = uuidv4();
   console.log(`Client connected: ${clientId}`);
@@ -63,7 +65,6 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-
       if (message.type === 'subscribe') {
         clients.set(clientId, {
           ws,
@@ -80,19 +81,15 @@ wss.on('connection', (ws, req) => {
           type: 'message',
           text: message.text,
           sender: message.sender,
-          senderId: message.senderId,  // ✅ Preserve original senderId from client
+          senderId: message.senderId,
           group: message.group,
           timestamp: new Date().toISOString(),
           status: 'delivered'
         };
 
         await saveMessage(fullMessage);
-
-        clients.forEach((client) => {
-          if (
-            client.group === message.group &&
-            client.ws.readyState === WebSocket.OPEN
-          ) {
+        clients.forEach(client => {
+          if (client.group === message.group && client.ws.readyState === WebSocket.OPEN) {
             client.ws.send(JSON.stringify(fullMessage));
           }
         });
@@ -102,21 +99,17 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => {
-    clients.delete(clientId);
-  });
-
-  ws.on('error', (err) => {
-    console.error(`WS error for ${clientId}:`, err);
-  });
+  ws.on('close', () => clients.delete(clientId));
+  ws.on('error', (err) => console.error(`WS error for ${clientId}:`, err));
 });
 
-
+// Storage Initialization
 const initializeStorage = async () => {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
     if (!(await fileExists(OTP_FILE))) await fs.writeFile(OTP_FILE, '{}');
     if (!(await fileExists(MESSAGES_FILE))) await fs.writeFile(MESSAGES_FILE, '[]');
+    if (!(await fileExists(GROUPS_FILE))) await fs.writeFile(GROUPS_FILE, '[]'); // ✅ New
   } catch (err) {
     console.error('Storage init error:', err);
     process.exit(1);
@@ -132,6 +125,7 @@ const fileExists = async (path) => {
   }
 };
 
+// Email Setup
 const transporter = nodemailer.createTransport({
   service: process.env.EMAIL_SERVICE || 'gmail',
   auth: {
@@ -140,8 +134,8 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+// OTP Logic
 let otpStorage = {};
-
 const generateOTP = () => crypto.randomInt(100000, 999999).toString();
 
 const loadOtps = async () => {
@@ -161,6 +155,7 @@ const saveOtps = async () => {
   }
 };
 
+// Message Logic
 const saveMessage = async (message) => {
   try {
     const messages = JSON.parse(await fs.readFile(MESSAGES_FILE, 'utf8') || '[]');
@@ -182,6 +177,42 @@ const getMessages = async (group) => {
   }
 };
 
+// === ✅ Group Logic ===
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({ error: 'Invalid group name' });
+    }
+
+    const groups = JSON.parse(await fs.readFile(GROUPS_FILE, 'utf8') || '[]');
+    const newGroup = {
+      id: uuidv4(),
+      name: name.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    groups.push(newGroup);
+    await fs.writeFile(GROUPS_FILE, JSON.stringify(groups, null, 2));
+    res.status(201).json(newGroup);
+  } catch (err) {
+    console.error('Group creation error:', err);
+    res.status(500).json({ error: 'Failed to create group' });
+  }
+});
+
+app.get('/api/groups', async (req, res) => {
+  try {
+    const data = await fs.readFile(GROUPS_FILE, 'utf8');
+    const groups = JSON.parse(data || '[]');
+    res.json(groups);
+  } catch (err) {
+    console.error('Group fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+// === API Routes ===
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
@@ -198,6 +229,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Valid email required' });
     }
+
     const otp = generateOTP();
     otpStorage[email] = {
       otp,
@@ -205,12 +237,14 @@ app.post('/api/auth/send-otp', async (req, res) => {
       attempts: 0
     };
     await saveOtps();
+
     await transporter.sendMail({
       from: `Your App <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Your Verification Code',
       text: `Your OTP code is: ${otp}\nExpires in 5 minutes`
     });
+
     res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
     console.error('OTP send error:', err);
@@ -222,13 +256,16 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
+
     const stored = otpStorage[email];
     if (!stored) return res.status(400).json({ error: 'OTP not found' });
+
     if (Date.now() > stored.expiresAt) {
       delete otpStorage[email];
       await saveOtps();
       return res.status(400).json({ error: 'OTP expired' });
     }
+
     if (stored.otp !== otp) {
       stored.attempts = (stored.attempts || 0) + 1;
       if (stored.attempts >= 3) {
@@ -238,6 +275,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       }
       return res.status(400).json({ error: 'Invalid OTP' });
     }
+
     delete otpStorage[email];
     await saveOtps();
     res.json({ success: true, token: uuidv4(), user: { email } });
@@ -277,6 +315,7 @@ app.get('/api/messages/:group', async (req, res) => {
   }
 });
 
+// Start Server
 const startServer = async () => {
   await initializeStorage();
   await loadOtps();
