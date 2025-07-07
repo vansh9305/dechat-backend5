@@ -19,18 +19,12 @@ const allowedOrigins = [
 app.use(cors({
   origin: function (origin, callback) {
     console.log('Incoming Origin:', origin);
-
-    if (!origin) return callback(null, true); // allow curl, mobile, etc.
-
+    if (!origin) return callback(null, true);
     const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
     const isAllowed = allowedOrigins.includes(origin);
-
-    if (isLocalhost || isAllowed) {
-      return callback(null, true);
-    } else {
-      console.warn('❌ Blocked by CORS:', origin);
-      return callback(new Error('Not allowed by CORS: ' + origin));
-    }
+    if (isLocalhost || isAllowed) return callback(null, true);
+    console.warn('❌ Blocked by CORS:', origin);
+    return callback(new Error('Not allowed by CORS: ' + origin));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -39,14 +33,12 @@ app.use(cors({
 
 app.use(express.json({ limit: '10kb' }));
 
-// ===== Constants =====
 const PORT = process.env.PORT || 3002;
-const HOST = '0.0.0.0'; // Updated for Render compatibility
+const HOST = '0.0.0.0';
 const DATA_DIR = path.join(__dirname, 'data');
 const OTP_FILE = path.join(DATA_DIR, 'otp_store.json');
 const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 
-// ===== WebSocket Setup =====
 const server = createServer(app);
 const wss = new WebSocket.Server({ server });
 
@@ -66,10 +58,10 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-      
+
       if (message.type === 'subscribe') {
-        clients.set(clientId, { 
-          ws, 
+        clients.set(clientId, {
+          ws,
           group: message.group,
           walletAddress: message.walletAddress || null
         });
@@ -80,13 +72,14 @@ wss.on('connection', (ws, req) => {
         const fullMessage = {
           ...message,
           id: uuidv4(),
+          senderId: clientId,
           timestamp: new Date().toISOString(),
           status: 'delivered'
         };
 
         await saveMessage(fullMessage);
 
-        clients.forEach(client => {
+        clients.forEach((client, id) => {
           if (client.group === message.group && client.ws.readyState === WebSocket.OPEN) {
             client.ws.send(JSON.stringify(fullMessage));
           }
@@ -106,7 +99,6 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// ===== Storage Setup =====
 const initializeStorage = async () => {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
@@ -127,7 +119,6 @@ const fileExists = async (path) => {
   }
 };
 
-// ===== Email Setup =====
 const transporter = nodemailer.createTransport({
   service: process.env.EMAIL_SERVICE || 'gmail',
   auth: {
@@ -136,7 +127,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// ===== OTP Management =====
 let otpStorage = {};
 
 const generateOTP = () => crypto.randomInt(100000, 999999).toString();
@@ -158,7 +148,6 @@ const saveOtps = async () => {
   }
 };
 
-// ===== Message Storage =====
 const saveMessage = async (message) => {
   try {
     const messages = JSON.parse(await fs.readFile(MESSAGES_FILE, 'utf8') || '[]');
@@ -180,7 +169,6 @@ const getMessages = async (group) => {
   }
 };
 
-// ===== Routes =====
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
@@ -197,22 +185,19 @@ app.post('/api/auth/send-otp', async (req, res) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Valid email required' });
     }
-
     const otp = generateOTP();
-    otpStorage[email] = { 
+    otpStorage[email] = {
       otp,
       expiresAt: Date.now() + 300000,
       attempts: 0
     };
     await saveOtps();
-
     await transporter.sendMail({
-      from: `"Your App" <${process.env.EMAIL_USER}>`,
+      from: `Your App <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Your Verification Code',
       text: `Your OTP code is: ${otp}\nExpires in 5 minutes`
     });
-
     res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
     console.error('OTP send error:', err);
@@ -224,16 +209,13 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
     if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
-
     const stored = otpStorage[email];
     if (!stored) return res.status(400).json({ error: 'OTP not found' });
-
     if (Date.now() > stored.expiresAt) {
       delete otpStorage[email];
       await saveOtps();
       return res.status(400).json({ error: 'OTP expired' });
     }
-
     if (stored.otp !== otp) {
       stored.attempts = (stored.attempts || 0) + 1;
       if (stored.attempts >= 3) {
@@ -243,15 +225,9 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       }
       return res.status(400).json({ error: 'Invalid OTP' });
     }
-
     delete otpStorage[email];
     await saveOtps();
-    
-    res.json({
-      success: true,
-      token: uuidv4(),
-      user: { email }
-    });
+    res.json({ success: true, token: uuidv4(), user: { email } });
   } catch (err) {
     console.error('OTP verification error:', err);
     res.status(500).json({ error: 'Failed to verify OTP' });
@@ -265,15 +241,12 @@ app.post('/api/messages', async (req, res) => {
       id: uuidv4(),
       timestamp: new Date().toISOString()
     };
-
     await saveMessage(message);
-
     clients.forEach(client => {
       if (client.group === message.group && client.ws.readyState === WebSocket.OPEN) {
         client.ws.send(JSON.stringify(message));
       }
     });
-
     res.status(201).json(message);
   } catch (err) {
     console.error('Message save error:', err);
@@ -291,16 +264,11 @@ app.get('/api/messages/:group', async (req, res) => {
   }
 });
 
-// ===== Server Initialization =====
 const startServer = async () => {
   await initializeStorage();
   await loadOtps();
-
   server.listen(PORT, HOST, () => {
-    console.log(`
-      🚀 Server ready at http://${HOST}:${PORT}
-      💬 WebSocket running on ws://${HOST}:${PORT}
-    `);
+    console.log(`\n🚀 Server ready at http://${HOST}:${PORT}\n💬 WebSocket running on ws://${HOST}:${PORT}`);
   });
 };
 
