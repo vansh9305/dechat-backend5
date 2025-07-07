@@ -11,26 +11,23 @@ const WebSocket = require('ws');
 const app = express();
 
 const allowedOrigins = [
-  'https://your-frontend-url.netlify.app', // Production URL
+  'https://delicate-nasturtium-4d6975.netlify.app',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
 app.use(cors({
   origin: function (origin, callback) {
-    console.log('Incoming Origin:', origin); // <-- this MUST be here
-    if (!origin) return callback(null, true);
+    console.log('Incoming Origin:', origin);
+
+    if (!origin) return callback(null, true); // Allow non-browser tools like Postman
 
     const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
-    const allowedOrigins = [
-      'https://your-frontend-url.netlify.app',
-      process.env.FRONTEND_URL
-    ].filter(Boolean);
-
     const isAllowed = allowedOrigins.includes(origin);
+
     if (isLocalhost || isAllowed) {
       return callback(null, true);
     } else {
-      console.warn('Blocked by CORS:', origin);
+      console.warn('❌ Blocked by CORS:', origin);
       return callback(new Error('Not allowed by CORS: ' + origin));
     }
   },
@@ -38,6 +35,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json({ limit: '10kb' }));
 
 // ===== Constants =====
