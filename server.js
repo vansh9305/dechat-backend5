@@ -63,24 +63,31 @@ wss.on('connection', (ws, req) => {
         clients.set(clientId, {
           ws,
           group: message.group,
-          walletAddress: message.walletAddress || null
+          walletAddress: message.walletAddress || null,
+          senderId: message.senderId || clientId
         });
         return;
       }
 
       if (message.type === 'message') {
         const fullMessage = {
-          ...message,
           id: uuidv4(),
-          senderId: clientId,
+          type: 'message',
+          text: message.text,
+          sender: message.sender,
+          senderId: message.senderId,  // ✅ Preserve original senderId from client
+          group: message.group,
           timestamp: new Date().toISOString(),
           status: 'delivered'
         };
 
         await saveMessage(fullMessage);
 
-        clients.forEach((client, id) => {
-          if (client.group === message.group && client.ws.readyState === WebSocket.OPEN) {
+        clients.forEach((client) => {
+          if (
+            client.group === message.group &&
+            client.ws.readyState === WebSocket.OPEN
+          ) {
             client.ws.send(JSON.stringify(fullMessage));
           }
         });
@@ -98,6 +105,7 @@ wss.on('connection', (ws, req) => {
     console.error(`WS error for ${clientId}:`, err);
   });
 });
+
 
 const initializeStorage = async () => {
   try {
