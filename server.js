@@ -11,7 +11,8 @@ const WebSocket = require('ws');
 const app = express();
 
 const allowedOrigins = [
-  'https://candid-mousse-75e4d8.netlify.app/',
+  'https://delicate-nasturtium-4d6975.netlify.app',
+  'https://candid-mousse-75e4d8.netlify.app',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
@@ -19,7 +20,7 @@ app.use(cors({
   origin: function (origin, callback) {
     console.log('Incoming Origin:', origin);
 
-    if (!origin) return callback(null, true); // Allow non-browser tools like Postman
+    if (!origin) return callback(null, true); // allow curl, mobile, etc.
 
     const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
     const isAllowed = allowedOrigins.includes(origin);
